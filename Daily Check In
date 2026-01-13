@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clinic Progress + Check-in</title>
+  <style>
+    :root { --r: 14px; --pad: 14px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background:#0b0c10; color:#e9eef5; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 18px; }
+    .card { background:#121521; border:1px solid #22283b; border-radius: 18px; padding: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+    h1 { font-size: 18px; margin: 0 0 8px; letter-spacing: .2px; }
+    .sub { opacity:.8; font-size: 13px; }
+    .row { display:flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    button, input {
+      border-radius: 14px; border:1px solid #2a3150; background:#171b2a; color:#e9eef5;
+      padding: 12px 14px; font-weight: 600; cursor:pointer;
+    }
+    button:active { transform: translateY(1px); }
+    button.primary { background:#1b2a1e; border-color:#294a2e; }
+    button.warn { background:#2a1b1b; border-color:#4a2929; }
+    button.ghost { background:transparent; }
+    input[type="number"] { width: 120px; font-weight: 700; }
+    input[type="checkbox"] { width: 18px; height: 18px; padding: 0; }
+    .bar {
+      width:100%; height: 18px; border-radius: 999px; overflow:hidden;
+      background:#0f1220; border:1px solid #22283b; display:flex;
+    }
+    .seg { height:100%; }
+    .seg.done { background:#2ecc71; }      /* green */
+    .seg.cancel { background:#f39c12; }    /* amber */
+    .seg.rem { background:#2b314a; }       /* grey */
+    .stats { display:flex; gap:12px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
+    .pill { padding: 6px 10px; border-radius: 999px; border:1px solid #22283b; background:#0f1220; }
+    .list { margin-top: 14px; }
+    .item { border-top:1px solid #22283b; padding: 10px 0; display:flex; justify-content:space-between; gap: 10px; }
+    .item:first-child { border-top:none; }
+    .muted { opacity:.75; font-size: 13px; }
+    .tag { font-size: 12px; padding: 4px 8px; border-radius: 999px; border:1px solid #2a3150; }
+    .tag.done { background: rgba(46,204,113,.12); border-color: rgba(46,204,113,.35); }
+    .tag.cancel { background: rgba(243,156,18,.12); border-color: rgba(243,156,18,.35); }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+
+    /* Modal */
+    .backdrop { position:fixed; inset:0; background: rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; padding: 16px; }
+    .modal { width:min(680px, 100%); background:#121521; border:1px solid #22283b; border-radius: 18px; padding: 16px; }
+    textarea { width:100%; min-height: 70px; resize: vertical; border-radius: 14px; border:1px solid #2a3150; background:#0f1220; color:#e9eef5; padding: 10px; }
+    .range { width:100%; }
+    .right { margin-left:auto; }
+    .aiBox { white-space: pre-wrap; background:#0f1220; border:1px solid #22283b; padding: 12px; border-radius: 14px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Clinic Progress + Check-in</h1>
+      <div class="sub" id="dateLine"></div>
+
+      <div class="row" style="align-items:center;">
+        <label class="pill">Today’s total:
+          <input id="total" type="number" min="0" step="1" />
+        </label>
+        <button class="ghost" id="reset">Reset day</button>
+        <button class="ghost" id="export">Export JSON (raw log)</button>
+      </div>
+
+      <div style="margin-top:12px;">
+        <div class="bar" aria-label="progress bar">
+          <div class="seg done" id="segDone" style="width:0%"></div>
+          <div class="seg cancel" id="segCancel" style="width:0%"></div>
+          <div class="seg rem" id="segRem" style="width:100%"></div>
+        </div>
+
+        <div class="stats" id="stats"></div>
+      </div>
+
+      <div class="row">
+        <button class="primary" id="btnDone">+ Completed</button>
+        <button class="warn" id="btnCancel">+ Cancel / DNA</button>
+        <button id="undo">Undo</button>
+      </div>
+
+      <!-- Local summary + Export packet (for any AI) -->
+      <div class="row" style="margin-top:8px;">
+        <button class="ghost" id="localSummary">End-of-day summary (local)</button>
+
+        <span class="pill" style="display:flex; align-items:center; gap:10px;">
+          <span style="font-weight:700;">Export includes notes</span>
+          <input id="includeNotes" type="checkbox" checked />
+          <span class="muted" id="privacyHint">On</span>
+        </span>
+
+        <button class="ghost" id="copyPacket">Copy reflection packet</button>
+        <button class="ghost" id="dlJson">Download packet JSON</button>
+        <button class="ghost" id="dlMd">Download packet Markdown</button>
+      </div>
+
+      <div id="summaryOut" class="aiBox" style="display:none;"></div>
+
+      <div class="list" id="log"></div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div class="backdrop" id="backdrop">
+    <div class="modal">
+      <h1 style="margin-bottom:4px;" id="modalTitle">Quick check-in</h1>
+      <div class="sub" id="modalSub">Optional — skip if you’re busy.</div>
+
+      <div class="grid2" style="margin-top:12px;">
+        <div class="pill">
+          <div style="font-weight:700; margin-bottom:6px;">Mood (1–5)</div>
+          <input class="range" id="mood" type="range" min="1" max="5" step="1" value="3" />
+          <div class="muted">Current: <span id="moodVal">3</span></div>
+        </div>
+        <div class="pill" id="gapBox" style="display:none;">
+          <div style="font-weight:700; margin-bottom:6px;">If it was a gap… what did you do?</div>
+          <textarea id="gapUsedFor" placeholder="e.g., notes, coffee, admin, decompressed, walked outside"></textarea>
+        </div>
+      </div>
+
+      <div class="pill" style="margin-top:10px;">
+        <div style="font-weight:700; margin-bottom:6px;">Note (optional)</div>
+        <textarea id="note" placeholder="What stood out emotionally / clinically?"></textarea>
+      </div>
+
+      <div class="row" style="margin-top:12px;">
+        <button class="ghost" id="skip">Skip</button>
+        <button class="right" id="save">Save check-in</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const todayKey = () => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    return `clinicProgress:${yyyy}-${mm}-${dd}`;
+  };
+
+  const state = {
+    total: 10,
+    entries: [], // {time, status, mood?, note?, gapUsedFor?}
+    pendingIndex: null
+  };
+
+  const els = {
+    dateLine: document.getElementById('dateLine'),
+    total: document.getElementById('total'),
+    segDone: document.getElementById('segDone'),
+    segCancel: document.getElementById('segCancel'),
+    segRem: document.getElementById('segRem'),
+    stats: document.getElementById('stats'),
+    log: document.getElementById('log'),
+    reset: document.getElementById('reset'),
+    export: document.getElementById('export'),
+    undo: document.getElementById('undo'),
+    btnDone: document.getElementById('btnDone'),
+    btnCancel: document.getElementById('btnCancel'),
+    localSummary: document.getElementById('localSummary'),
+    summaryOut: document.getElementById('summaryOut'),
+    // modal
+    backdrop: document.getElementById('backdrop'),
+    modalTitle: document.getElementById('modalTitle'),
+    modalSub: document.getElementById('modalSub'),
+    mood: document.getElementById('mood'),
+    moodVal: document.getElementById('moodVal'),
+    note: document.getElementById('note'),
+    gapBox: document.getElementById('gapBox'),
+    gapUsedFor: document.getElementById('gapUsedFor'),
+    skip: document.getElementById('skip'),
+    save: document.getElementById('save'),
+    // export packet controls
+    includeNotes: document.getElementById('includeNotes'),
+    privacyHint: document.getElementById('privacyHint'),
+    copyPacket: document.getElementById('copyPacket'),
+    dlJson: document.getElementById('dlJson'),
+    dlMd: document.getElementById('dlMd'),
+  };
+
+  function load() {
+    const raw = localStorage.getItem(todayKey());
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        state.total = parsed.total ?? state.total;
+        state.entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+      } catch {}
+    }
+    els.total.value = state.total;
+
+    const d = new Date();
+    els.dateLine.textContent = d.toLocaleDateString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+    render();
+  }
+
+  function persist() {
+    localStorage.setItem(todayKey(), JSON.stringify({ total: state.total, entries: state.entries }));
+  }
+
+  function counts() {
+    const done = state.entries.filter(e => e.status === 'completed').length;
+    const cancel = state.entries.filter(e => e.status === 'cancelled').length;
+    const used = done + cancel;
+    const total = Math.max(0, Number(state.total) || 0);
+    const rem = Math.max(0, total - used);
+    return { done, cancel, used, rem, total };
+  }
+
+  function render() {
+    const { done, cancel, used, rem, total } = counts();
+
+    const pct = (n) => total === 0 ? 0 : (n / total) * 100;
+    els.segDone.style.width = `${Math.min(100, pct(done))}%`;
+    els.segCancel.style.width = `${Math.min(100, pct(cancel))}%`;
+    els.segRem.style.width = `${Math.max(0, 100 - pct(done) - pct(cancel))}%`;
+
+    els.stats.innerHTML = `
+      <div class="pill">✅ ${done} completed</div>
+      <div class="pill">🟧 ${cancel} cancelled/DNA</div>
+      <div class="pill">⏳ ${rem} remaining</div>
+      <div class="pill"><strong>${used}</strong> / <strong>${total}</strong></div>
+    `;
+
+    // log list newest first
+    const sorted = [...state.entries].sort((a,b) => (b.time||0) - (a.time||0));
+    els.log.innerHTML = sorted.map(e => {
+      const t = new Date(e.time).toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
+      const tagClass = e.status === 'completed' ? 'done' : 'cancel';
+      const tagText = e.status === 'completed' ? 'Completed' : 'Cancel/DNA';
+      const mood = e.mood ? ` • mood ${e.mood}/5` : '';
+      const note = e.note ? `<div class="muted">${escapeHtml(e.note)}</div>` : '';
+      const gap = (e.status === 'cancelled' && e.gapUsedFor) ? `<div class="muted">Gap used for: ${escapeHtml(e.gapUsedFor)}</div>` : '';
+      return `
+        <div class="item">
+          <div>
+            <div><span class="tag ${tagClass}">${tagText}</span> <span class="muted">${t}${mood}</span></div>
+            ${note}${gap}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    persist();
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function openModal(forStatus, entryIndex) {
+    state.pendingIndex = entryIndex;
+    els.modalTitle.textContent = forStatus === 'completed' ? 'Completed — quick check-in' : 'Cancellation/DNA — quick check-in';
+    els.modalSub.textContent = 'Optional — save a mood + note for end-of-day reflection.';
+    els.mood.value = 3;
+    els.moodVal.textContent = '3';
+    els.note.value = '';
+    els.gapUsedFor.value = '';
+    els.gapBox.style.display = (forStatus === 'cancelled') ? 'block' : 'none';
+    els.backdrop.style.display = 'flex';
+  }
+
+  function closeModal() {
+    els.backdrop.style.display = 'none';
+    state.pendingIndex = null;
+  }
+
+  function addEntry(status) {
+    const { total, used } = counts();
+    if (used >= total && total !== 0) {
+      // allow overflow, but auto-increase total to avoid “stuck” feeling
+      state.total = used + 1;
+      els.total.value = state.total;
+    }
+    const entry = { time: Date.now(), status };
+    state.entries.push(entry);
+    render();
+    openModal(status, state.entries.length - 1);
+  }
+
+  function undo() {
+    state.entries.pop();
+    render();
+  }
+
+  function resetDay() {
+    state.entries = [];
+    render();
+  }
+
+  function localEndOfDaySummary() {
+    const { done, cancel, total } = counts();
+    const moods = state.entries.map(e => e.mood).filter(Boolean);
+    const avgMood = moods.length ? (moods.reduce((a,b)=>a+b,0) / moods.length).toFixed(1) : '—';
+
+    const lowest = [...state.entries]
+      .filter(e => e.mood && e.note)
+      .sort((a,b) => a.mood - b.mood)
+      .slice(0, 3);
+
+    const gaps = state.entries
+      .filter(e => e.status === 'cancelled' && e.gapUsedFor)
+      .map(e => `• ${e.gapUsedFor}`);
+
+    const text =
+`End-of-day (local)
+- Completed: ${done}/${total}
+- Cancel/DNA: ${cancel}
+- Avg mood: ${avgMood}
+
+Lowest mood moments (up to 3):
+${lowest.length ? lowest.map(e => `• mood ${e.mood}/5 — ${e.note}`).join('\n') : '• (none logged)'}
+
+Gap usage:
+${gaps.length ? gaps.join('\n') : '• (none logged)'}
+`;
+    els.summaryOut.style.display = 'block';
+    els.summaryOut.textContent = text;
+  }
+
+  // ---------- Export packet additions ----------
+  function computeMoodStats(entries) {
+    const moods = entries.map(e => e.mood).filter(Boolean);
+    if (!moods.length) return { count: 0 };
+
+    const sum = moods.reduce((a,b)=>a+b,0);
+    const avg = sum / moods.length;
+    const min = Math.min(...moods);
+    const max = Math.max(...moods);
+
+    // crude trend: compare first third vs last third
+    const sorted = [...entries].filter(e => e.mood).sort((a,b)=>a.time-b.time);
+    const n = sorted.length;
+    const third = Math.max(1, Math.floor(n/3));
+    const a1 = sorted.slice(0, third).map(x => x.mood);
+    const a2 = sorted.slice(Math.max(0, n - third), n).map(x => x.mood);
+    const avg1 = a1.reduce((a,b)=>a+b,0)/a1.length;
+    const avg2 = a2.reduce((a,b)=>a+b,0)/a2.length;
+    const trend = (avg2 > avg1 + 0.3) ? "improving" : (avg2 < avg1 - 0.3) ? "declining" : "stable";
+
+    return {
+      count: moods.length,
+      avg: Number(avg.toFixed(2)),
+      min,
+      max,
+      trend
+    };
+  }
+
+  function buildDailyPacket({ includeNotes }) {
+    const { done, cancel, rem, total } = counts();
+    const entriesSorted = [...state.entries].sort((a,b)=>a.time-b.time);
+
+    const moodStats = computeMoodStats(entriesSorted);
+
+    const gapUsage = entriesSorted
+      .filter(e => e.status === 'cancelled' && e.gapUsedFor)
+      .map(e => e.gapUsedFor);
+
+    const notableNotes = includeNotes
+      ? entriesSorted
+          .filter(e => (e.note && e.note.trim()) || (e.status === 'cancelled' && e.gapUsedFor && e.gapUsedFor.trim()))
+          .map(e => ({
+            time: new Date(e.time).toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' }),
+            status: e.status,
+            mood: e.mood ?? null,
+            note: e.note?.trim() || "",
+            gapUsedFor: e.gapUsedFor?.trim() || ""
+          }))
+      : [];
+
+    const prompt =
+`You are a supportive reflective coach (warm like a therapist, practical like a performance coach).
+Tone: kind, grounded, encouraging, no hype.
+Constraints:
+- Do NOT give medical advice.
+- Keep it concise and actionable.
+- Focus on patterns, energy, mood, and recovery.
+
+Task:
+Use the data below to produce:
+1) A 5–8 sentence recap of the day (compassionate + factual).
+2) 2–4 bullets: what likely drained me vs what restored me (based on notes + mood).
+3) One small win to acknowledge.
+4) Two unwind options for tonight: one 5-minute option and one deeper 30–60 minute option.
+5) One gentle suggestion for tomorrow (single next step).
+
+If notes are absent, work only with counts and mood stats and state your uncertainty.
+`;
+
+    const packet = {
+      date: new Date().toLocaleDateString(undefined, { year:'numeric', month:'long', day:'numeric' }),
+      totals: { total, completed: done, cancelled_or_dna: cancel, remaining: rem },
+      mood: moodStats.count ? moodStats : { count: 0, note: "No mood ratings logged." },
+      gap_usage: gapUsage,
+      entries: includeNotes ? notableNotes : undefined,
+      prompt
+    };
+
+    const textBlock =
+`# Daily Reflection Packet
+
+Date: ${packet.date}
+
+## Totals
+- Completed: ${done}/${total}
+- Cancel/DNA: ${cancel}
+- Remaining: ${rem}
+
+## Mood
+${moodStats.count
+  ? `- Entries with mood: ${moodStats.count}
+- Avg mood: ${moodStats.avg}/5
+- Min/Max: ${moodStats.min}/${moodStats.max}
+- Trend: ${moodStats.trend}`
+  : `- No mood ratings logged.`}
+
+## Gap usage (from cancellations)
+${gapUsage.length ? gapUsage.map(x => `- ${x}`).join('\n') : `- (none logged)`}
+
+## Notes / events
+${includeNotes
+  ? (notableNotes.length
+      ? notableNotes.map(e => {
+          const status = e.status === 'completed' ? 'Completed' : 'Cancel/DNA';
+          const mood = e.mood ? `mood ${e.mood}/5` : 'mood —';
+          const note = e.note ? `Note: ${e.note}` : '';
+          const gap = (e.status === 'cancelled' && e.gapUsedFor) ? `Gap used for: ${e.gapUsedFor}` : '';
+          const lines = [ `${e.time} • ${status} • ${mood}`, note, gap ].filter(Boolean);
+          return lines.map(l => `- ${l}`).join('\n');
+        }).join('\n')
+      : `- (no notes logged)`)
+  : `- (notes excluded by privacy toggle)`}
+
+---
+
+## Prompt to paste into any AI
+${prompt}
+
+---
+
+## Data (JSON)
+${JSON.stringify(packet, null, 2)}
+`;
+    return { packet, textBlock };
+  }
+
+  async function copyReflectionPacket() {
+    const includeNotes = !!els.includeNotes?.checked;
+    const { textBlock } = buildDailyPacket({ includeNotes });
+    try {
+      await navigator.clipboard.writeText(textBlock);
+      els.summaryOut.style.display = 'block';
+      els.summaryOut.textContent = includeNotes
+        ? "Copied reflection packet (with notes) to clipboard."
+        : "Copied reflection packet (stats-only) to clipboard.";
+    } catch (e) {
+      // fallback: show it so user can manually copy
+      els.summaryOut.style.display = 'block';
+      els.summaryOut.textContent = textBlock;
+    }
+  }
+
+  function downloadFile(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadPacketJson() {
+    const includeNotes = !!els.includeNotes?.checked;
+    const { packet } = buildDailyPacket({ includeNotes });
+    const safeDate = todayKey().split(':')[1];
+    downloadFile(`clinic_reflection_${safeDate}.json`, JSON.stringify(packet, null, 2), 'application/json');
+  }
+
+  function downloadPacketMarkdown() {
+    const includeNotes = !!els.includeNotes?.checked;
+    const { textBlock } = buildDailyPacket({ includeNotes });
+    const safeDate = todayKey().split(':')[1];
+    downloadFile(`clinic_reflection_${safeDate}.md`, textBlock, 'text/markdown');
+  }
+  // ---------- End export packet additions ----------
+
+  // Events
+  els.total.addEventListener('change', () => { state.total = Math.max(0, Number(els.total.value)||0); render(); });
+  els.btnDone.addEventListener('click', () => addEntry('completed'));
+  els.btnCancel.addEventListener('click', () => addEntry('cancelled'));
+  els.undo.addEventListener('click', undo);
+  els.reset.addEventListener('click', resetDay);
+
+  // Raw log export (same as earlier)
+  els.export.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify({ total: state.total, entries: state.entries }, null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${todayKey().replace(':','_')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // Modal interactions
+  els.mood.addEventListener('input', () => els.moodVal.textContent = els.mood.value);
+
+  els.skip.addEventListener('click', closeModal);
+  els.save.addEventListener('click', () => {
+    const idx = state.pendingIndex;
+    if (idx == null) return closeModal();
+    state.entries[idx].mood = Number(els.mood.value);
+    state.entries[idx].note = els.note.value.trim() || '';
+    if (state.entries[idx].status === 'cancelled') {
+      state.entries[idx].gapUsedFor = els.gapUsedFor.value.trim() || '';
+    }
+    closeModal();
+    render();
+  });
+
+  els.backdrop.addEventListener('click', (e) => { if (e.target === els.backdrop) closeModal(); });
+
+  // Local summary
+  els.localSummary.addEventListener('click', localEndOfDaySummary);
+
+  // Privacy toggle hint
+  if (els.includeNotes && els.privacyHint) {
+    const updateHint = () => els.privacyHint.textContent = els.includeNotes.checked ? "On" : "Off";
+    els.includeNotes.addEventListener('change', updateHint);
+    updateHint();
+  }
+
+  // Packet export actions
+  els.copyPacket.addEventListener('click', copyReflectionPacket);
+  els.dlJson.addEventListener('click', downloadPacketJson);
+  els.dlMd.addEventListener('click', downloadPacketMarkdown);
+
+  load();
+})();
+</script>
+</body>
+</html>
